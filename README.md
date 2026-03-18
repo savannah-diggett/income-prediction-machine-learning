@@ -46,15 +46,15 @@ The best model was **KNN with k = 5**:
 This model was selected because it best aligned with the bank’s main goal of avoiding false positives.
 
 ### K-Means Results
-Five K-Means models were compared using silhouette scores.
+Five K-Means models were compared using silhouette scores. Model 3 performed best, using the highest-correlation features, unscaled data, and k = 2, with a silhouette score of 0.5271.
 
-The best clustering model was **Model 3**:
-- Highest-correlation features
-- Unscaled data
-- k = 2
-- Silhouette score: 0.5271
+## Visualizations
 
-Although K-Means produced useful segmentation patterns, supervised learning remained more appropriate for the bank’s prediction task.
+The figures below summarize the final KNN model comparison and K-Means silhouette results.
+
+![KNN Metrics](figures/knn_metrics.png)
+
+![K-Means Silhouette Scores](figures/kmeans_silhouette.png)
 
 ## Repository Contents
 - `income_classification_segmentation.Rmd`: full analysis
@@ -63,4 +63,5 @@ Although K-Means produced useful segmentation patterns, supervised learning rema
 - `scripts/`: helper functions if needed
 
 ## Takeaway
-This project demonstrates model selection based on business priorities, comparison of classification and clustering methods, and the interpretation of results in a decision-making context.
+KNN was more useful for the bank’s decision problem because the task involved predicting income class, while K-Means was better suited for exploratory segmentation.
+
