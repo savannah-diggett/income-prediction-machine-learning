@@ -1,0 +1,785 @@
+---
+title: "Predicting High-Income Individuals Using KNN Classification and K-Means Clustering"
+output:
+  pdf_document:
+    latex_engine: xelatex
+date: "2025-03-31"
+---
+```{r setup, include=TRUE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# To create the technical report use: 
+# ```{r setup, include=TRUE}
+# knitr::opts_chunk$set(echo = TRUE)
+
+# To create the manager report use:
+#   ```{r setup, include=FALSE}
+  # knitr::opts_chunk$set(echo = FALSE, results = 'hide', message = FALSE, warning = FALSE, fig.show = 'hide')
+```
+
+# TASK 1: KNN 
+Objectives: As the consultant, I know that the bank wants to target high-income customers for loans (those making >50K per year), and avoid giving loans to low-income earners (< 50K). Therefore, the primary objective is to minimize false positives — that is, to reduce the chance of giving loans to individuals who are actually low-income but were predicted as high-income. This makes precision and specificity the most important metrics for model evaluation. Our secondary objective is to avoid denying loans to qualified high-income earners. This means we also want reasonably good recall, but not at the expense of precision. 
+```{r}
+# Loading the libraries
+library(ggplot2)
+library(caret) 
+library(cowplot)
+library(pROC)
+library(dplyr)
+library(forcats)
+library(kknn)    
+library(factoextra)
+library(caret)
+```
+
+```{r}
+# KNN EDA 
+# Checking how the categorical variables relate to class
+# Categorical first
+FileURL1 <- "https://archive.ics.uci.edu/ml/machine-learning-databases/adult/adult.data"
+FileURL2 <- "https://archive.ics.uci.edu/ml/machine-learning-databases/adult/adult.test"
+
+if(!file.exists("data/census_training.csv")){
+  download.file(FileURL1, destfile="data/census_training.csv")
+}
+
+if(!file.exists("data/census_test.csv")){
+  download.file(FileURL2, destfile="data/census_test.csv")
+}
+list.files()
+census_train<- read.table("census_training.csv",sep=",",header=TRUE)   
+
+colnames(census_train)
+
+census_train <- read.table("census_training.csv",sep=",",header=FALSE,strip.white=TRUE)   
+censuscolnames <- c("age", "workclass","fnlwgt","education","education_num","marital_status","occupation","relationship","race","sex","capital_gain","capital_loss","hours_per_week","native_country", "class")
+colnames(census_train) <- censuscolnames 
+
+# Skipping the first row
+
+censuscolnames <- c("age", "workclass","fnlwgt","education","education_num","marital_status","occupation","relationship","race","sex","capital_gain","capital_loss","hours_per_week","native_country", "class")
+colnames(census_train) <- censuscolnames
+```
+
+```{r}
+# Check if 'class' exists
+"census_train$class" %in% names(census_train)
+# Try one variable manually
+table(census_train$relationship, census_train$class)
+
+cat_vars <- c("relationship", "marital_status", "sex", "occupation", "race", "education")
+
+for (var in cat_vars) {
+  cat("===== ", var, " vs. class =====\n")
+  tab <- table(census_train[[var]], census_train$class)
+  print(tab)
+  print(chisq.test(tab))
+  cat("\n\n")
+}
+# Summary of the tables
+# Relationship: Low income people are most likely own-child, unmarried, or not-in-family.
+
+# Marital_status: If you are not currently in a relationship then you will most likley be low-income.
+
+# Gender: more females are high income than low income, and most males are low income instead of high income (girl power!)
+
+
+# Occupation: all listed jobs have a higher amount of people in low income.
+
+# Race: White is the only race with higher amount of people in high-income. 
+
+# Education: all degrees masters and above have a higher percentage of high income earners while all education below the masters level has majority low income earners. 
+```
+
+
+```{r}
+# Checking how the numerical variables relate to class
+
+num_vars <- c("age", "hours_per_week", "education_num", "capital_gain", "capital_loss", "fnlwgt")
+for (var in num_vars) {
+  cat("===== ", var, " by class =====\n")
+  print(t.test(census_train[[var]] ~ census_train$class))
+  print(aggregate(census_train[[var]], by = list(Class = census_train$class), summary))
+  cat("\n\n")
+}
+
+for (var in num_vars) {
+  p <- ggplot(census_train, aes_string(x = "class", y = var)) +
+    geom_boxplot(fill = "lightgreen") +
+    labs(title = paste(var, "by Class"), x = "Class", y = var) +
+    theme_minimal()
+
+}
+# Summary of the numerical variable EDA
+# Age: the mean age of the high income earners is more than low income earners.
+
+# Hours per week: means do not look very different between high and low income, but high has slightly more hours.
+
+# Education num: more education more money
+
+# Capital gain/loss: does not look related to class
+
+# fnlwgt: not related to class
+```
+
+```{r}
+# Normalizing the data
+normalize_data <- function(df) {
+  numeric_df <- as.data.frame(lapply(df, function(x) {
+    if (is.numeric(x)) x else as.numeric(factor(x))
+  }))
+  as.data.frame(lapply(numeric_df, function(x) (x - min(x)) / (max(x) - min(x))))
+}
+
+censusnorm <- normalize_data(census_train[, 1:14])
+censusnorm$class <- census_train$class
+```
+
+```{r}
+# Train-Test Split
+set.seed(231)
+trainIndex <- createDataPartition(censusnorm$class, p = 0.005, list = FALSE)
+TrainData <- censusnorm[trainIndex, ]
+TestData <- censusnorm[-trainIndex, ]
+TrainData$class <- as.factor(TrainData$class)
+TestData$class <- as.factor(TestData$class)
+
+# Class Balance
+# summary(TrainData$class)/nrow(TrainData)
+# summary(TestData$class)/nrow(TestData)
+```
+
+```{r}
+# KNN MODEL 1: Default K
+set.seed(231)
+KnnModel <- train(form = class ~.,  
+                  data = TrainData,   
+                  method = 'knn')    
+plot(KnnModel)
+
+# This is telling us that k = 7 or less neighbors. 
+```
+
+```{r}
+KnnModel$bestTune
+TrainData$class <- relevel(TrainData$class, ref = ">50K")
+TestData$class  <- relevel(TestData$class, ref = ">50K")
+
+
+# Prediction metrics
+TestPred <- predict(object= KnnModel, newdata = TestData, type = "raw")  
+mean(TestPred == TestData$class) 
+confusionMatrix(data = TestPred, reference = TestData$class) 
+
+
+# 5550 poor misspecified as rich. 
+# 1527 rich misspecified as poor. 
+
+# We used the default k (which tested k=5,7,9). We could try to improve the model by changing k.
+```
+
+```{r}
+# Tuning K (3-7)
+
+
+# Since Model 1 indicated that k is less than or equal to 7, we will train all the possible k values between 3 and 7, then use the best and word k values to form models 2 and 3. 
+
+set.seed(123)
+small_sample <- census_train[sample(nrow(census_train), 1000), ]
+small_sample$class<- as.factor(small_sample$class)
+KnnModel <- train(
+  class ~ .,
+  data = small_sample,
+  method = 'knn',
+  tuneGrid = expand.grid(.k = 2:10),
+  metric = 'Accuracy',
+  trControl = trainControl(method = 'repeatedcv', number = 5, repeats = 10)
+)
+plot(KnnModel)
+confusionMatrix(KnnModel)
+
+# From inspection of the accuracy scores using k = 2 through k = 10, it appears that 2 provides a low accuracy, whereas adding one additional neighbor (K = 3) yields a far better accuracy.
+
+# The accuracy levels plateau after k = 5, without any increase in accuracy. I will run three KNN models using k = 2 (worst accuracy), k = 4 (decent accuracy), and k = 5 (better accuracy), and evaluate the metrics of each to determine the best KNN model. 
+
+# If the metrics are similar, I will choose the model with the lowest amount of K neighbors, to make interpretation as simple as possible. 
+
+```
+
+
+```{r}
+# Before starting, lets get the data ready...
+# converting to numeric
+census_numeric <- as.data.frame(lapply(census_train[, 1:14], function(x) as.numeric(factor(x))))
+
+# normalizing the data
+normalise <- function(x) { (x - min(x)) / (max(x) - min(x)) }
+censusnormal <- as.data.frame(lapply(census_numeric, normalise))
+censusnormal$class <- census_train$class
+
+set.seed(231)
+
+#creating the partition
+trainIndex <- createDataPartition(censusnormal$class, p=.005, list=FALSE, times=1)
+
+#populating the TrainData
+TrainData <- censusnormal[trainIndex,]
+
+#populating the TestData
+TestData <- censusnormal[-trainIndex,]
+
+nrow(TrainData)/nrow(censusnormal)
+nrow(TestData)/nrow(censusnormal)
+
+#showing the balance between the classes
+TrainData$class <- as.factor(TrainData$class)
+TestData$class <- as.factor(TestData$class)
+
+# we want > 50 k to be the positive class.
+TrainData$class <- relevel(TrainData$class, ref = ">50K")
+TestData$class  <- relevel(TestData$class, ref = ">50K")
+
+# summary(TrainData$class)/nrow(TrainData)
+# summary(TestData$class)/nrow(TestData)
+```
+
+
+```{r}
+# Cleaning the data
+TestData <- na.omit(TestData)
+
+# Ensure class is a factor
+TestData$class <- factor(TestData$class, levels = levels(small_sample$class))
+
+# double checking numeric values are correct
+predictors <- names(TestData)[names(TestData) != "class"]
+TestData[predictors] <- lapply(TestData[predictors], as.numeric)
+```
+
+
+```{r}
+## === MODEL 1 (k = 2) ===
+TrainData$class <- relevel(TrainData$class, ref = ">50K")
+TestData$class  <- relevel(TestData$class, ref = ">50K")
+
+set.seed(231)
+KnnModel1 <- train(class ~ ., 
+                   data = TrainData,
+                   method = 'knn',
+                   tuneGrid = expand.grid(.k = 2),
+                   trControl = trainControl(method = 'repeatedcv', number = 10, repeats = 15))
+Pred1 <- predict(KnnModel1, newdata = TestData)
+cm1 <- confusionMatrix(Pred1, TestData$class)
+```
+
+```{r}
+## === MODEL 2 (k = 3) ===
+TrainData$class <- relevel(TrainData$class, ref = ">50K")
+TestData$class  <- relevel(TestData$class, ref = ">50K")
+
+set.seed(231)
+KnnModel2 <- train(class ~ ., 
+                   data = TrainData,
+                   method = 'knn',
+                   tuneGrid = expand.grid(.k = 3),
+                   trControl = trainControl(method = 'repeatedcv', number = 10, repeats = 15))
+Pred2 <- predict(KnnModel2, newdata = TestData)
+cm2 <- confusionMatrix(Pred2, TestData$class)
+```
+
+```{r}
+## === MODEL 3 (k = 5) ===
+TrainData$class <- relevel(TrainData$class, ref = ">50K")
+TestData$class  <- relevel(TestData$class, ref = ">50K")
+
+set.seed(231)
+KnnModel3 <- train(class ~ ., 
+                   data = TrainData,
+                   method = 'knn',
+                   tuneGrid = expand.grid(.k = 5),
+                   trControl = trainControl(method = 'repeatedcv', number = 10, repeats = 15))
+Pred3 <- predict(KnnModel3, newdata = TestData)
+cm3 <- confusionMatrix(Pred3, TestData$class)
+```
+
+```{r}
+# Extract metrics from confusion matrices
+acc1 <- cm1$overall["Accuracy"]
+sen1 <- cm1$byClass["Sensitivity"]
+spe1 <- cm1$byClass["Specificity"]
+pre1 <- cm1$byClass["Pos Pred Value"]
+
+acc2 <- cm2$overall["Accuracy"]
+sen2 <- cm2$byClass["Sensitivity"]
+spe2 <- cm2$byClass["Specificity"]
+pre2 <- cm2$byClass["Pos Pred Value"]
+
+acc3 <- cm3$overall["Accuracy"]
+sen3 <- cm3$byClass["Sensitivity"]
+spe3 <- cm3$byClass["Specificity"]
+pre3 <- cm3$byClass["Pos Pred Value"]
+
+```
+
+```{r}
+# Combine into one matrix
+metrics <- matrix(c(
+  acc1, sen1, spe1, pre1,
+  acc2, sen2, spe2, pre2,
+  acc3, sen3, spe3, pre3
+), nrow = 4, byrow = FALSE)
+
+# Label rows and columns
+rownames(metrics) <- c("Accuracy", "Recall/Sensitivity", "Specificity", "Precision")
+colnames(metrics) <- c("Model1 (k=2)", "Model2 (k=3)", "Model3 (k=5)")
+```
+
+```{r knn-visual, echo=FALSE, include=TRUE, fig.show='asis'}
+# Visualization of KNN Model Metrics
+# making the plot bigger to fit everything
+par(mar = c(5, 4, 4, 8))  # Adds space on the right
+
+colors <- c("steelblue", "darkorange", "seagreen", "orchid")
+
+# grouped bar plot
+bar_centers <- barplot(metrics,
+                       beside = TRUE,
+                       col = colors,
+                       ylim = c(0, 1),
+                       main = "KNN Model Performance Metrics",
+                       ylab = "Metric Value",
+                       xlab = "Model")
+
+# labels
+text(x = bar_centers,
+     y = as.vector(metrics) + 0.03,
+     labels = round(as.vector(metrics), 3),
+     cex = 0.7)
+# legend
+legend("topright",
+       inset = c(-0.25, 0),  # moves legend farther right
+       legend = rownames(metrics),
+       fill = colors,
+       bty = "n",
+       xpd = TRUE,           # allows drawing outside plot area
+       cex = 0.8)
+
+# Model 3 (k = 5) had the highest precision (51.3%) and highest specificity (86.1%), meaning it was best at avoiding false positives — which directly aligns with our primary objective of not giving loans to low-income earners.
+
+# Although Model 1 had the highest recall (53.1%), it had lower specificity and precision, which increases the risk of incorrectly approving low-income individuals. 
+
+# Since this is riskier than missing a few qualified applicants, I have chosen Model 3 (k = 5) the most appropriate choice for deployment.
+```
+
+```{r, results='asis', fig.show='asis', fig.width=5, fig.height=3}
+# KNN RESULTS TABLE 
+library(kableExtra)
+# Creating a table with updated metrics
+knn_results <- data.frame(
+  Model = c("KNN 1", "KNN 2", "KNN 3"),
+  Accuracy = c("73.26%", "76.06%", "77.36%"),
+  Precision = c("44.87%", "50.32%", "54.47%"),
+  Recall_Sensitivity = c("48.25%", "45.35%", "36.29%"),
+  Specificity = c("81.20%", "85.80%", "90.38%"),
+  Predictors = c("all", "all", "all"),
+  K = c("2", "3", "5")
+)
+
+knn_results %>%
+  kbl(caption = "KNN Model Performance Summary", align = "c", booktabs = TRUE) %>%
+  kable_styling(latex_options = "hold_position", font_size = 9)
+```
+
+After testing three different models, I found that they all performed quite the same. However, Model 3 (which uses k = 5) stood out as the best option for the bank’s goals. Model 3 was the most accurate at identifying low-income applicants, which helps us avoid mistakenly offering loans to individuals who are unlikely to qualify — our top priority. It also had the highest precision, meaning that when the model predicts someone is a good candidate, it's more likely to be correct.While another model was slightly better at identifying high-income applicants, it also made more mistakes by approving low-income applicants — which poses a bigger financial risk. For that reason, Model 3 was the safest and most reliable choice. 
+
+# TASK 2: K-MEANS
+Objectives: The objective of Task 2 was to identify the best K-Means clustering model by (1) determining the optimal number of clusters using elbow and silhouette plots, (2) selecting features based on their correlation with income, (3) comparing performance of scaled vs. unscaled data, and (4) choosing the model with the cleanest split and highest silhouette score.
+```{r}
+# K-Means EDA
+# Using eclust() to explore the data clustering using education_num and age.
+set.seed(123)
+census_sample <- census_train[sample(nrow(census_train), 100), c("education_num", "age")]
+scaled_sample <- scale(census_sample)
+census_kmeans <- eclust(scaled_sample, "kmeans", k = 2, graph = FALSE)
+fviz_cluster(census_kmeans, palette = "jco", geom = "point", ellipse.type = "convex", ggtheme = theme_minimal())
+
+#It looks like the variables education_num and ge provide good differential splits between clusters. There are not any outliers. 
+
+# Lets try another one with different variables. 
+
+```
+
+```{r}
+# ECLUST #2
+# Using eclust() to explore the data clustering using fnlwgt and hours_per_week
+set.seed(123)
+census_sample <- census_train[sample(nrow(census_train), 100), c("fnlwgt", "hours_per_week")]
+
+# Scale the data
+scaled_sample <- scale(census_sample)
+
+# Run k-means clustering with 3 clusters
+census_kmeans <- eclust(scaled_sample, "kmeans", k = 2, graph = FALSE)
+
+# Visualize the clusters
+fviz_cluster(census_kmeans, 
+             palette = "jco", 
+             geom = "point", 
+             ellipse.type = "convex", 
+             ggtheme = theme_minimal())
+# The clusters for fnlwght and hours_per_week are not as tight, and the points are pretty far from the cluster centers. 
+# These variables may not be as good features to include in the model. 
+```
+
+
+```{r}
+# Subsetting the data
+set.seed(231)
+censusnorm <- normalize_data(census_train[, 1:14])
+censusnorm$class <- census_train$class
+subsetIndex <- createDataPartition(censusnorm$class, p = .005, list = FALSE)
+subset_census <- censusnorm[subsetIndex,]
+Census_noclass <- subset_census[, 1:14]
+```
+
+```{r}
+# Class Distribution
+prop.table(table(subset_census$class))
+table(subset_census$class)
+
+# Hmm... the dataset seems really unbalanced. There is roughly 76% of the dataset falling into the <50% category while only 24% are in the > 50k category. 
+# Great, we have 124 in the  <=50K category, and 40 in the >50K category.
+```
+
+```{r Elbow 1}
+# K-MEANS Model 1: All features, unscaled, k = 2
+
+# Elbow Plot 1
+# Creating an elbow plot to see the # of k's we should have.
+library(factoextra)
+set.seed(123)
+fviz_nbclust(Census_noclass [,1:14], kmeans, method = "wss") +
+  ggtitle("Elbow Plot for Subset Census")
+
+# Hmmm, it looks like k = 2 would be the best, as the steepness is greatest for these two integers, and the plot levels off when k > 2.
+# It appears that k = 2 may be the best fit here. 
+
+# Let's also look at the silouette plot for further inspection of k. 
+```
+
+```{r Silhouette}
+# # Silhouette Plot 1
+
+Census_noclass<- subset_census[, 1:14]
+fviz_nbclust(Census_noclass, kmeans, method = "silhouette") + ggtitle("Census Sillouette Coefficients")
+
+# The silhouette plot also indicates that k = 2 is the best value (the value of k that produces the greatest silhouette score), so for our first model that includes all features (columns 1-14), should have 2 clusters. 
+
+# Let's train the first model using k = 2.
+
+```
+
+
+```{r}
+# Training M1 with K = 2
+set.seed(123)
+KmeanCensus1 <- kmeans(x = Census_noclass[, 1:14], centers = 2)
+
+# Evaluate
+table(class = subset_census$class, Cluster = KmeanCensus1$cluster)
+
+# We should do a correlation analysis to identify which features have the highest correlation with class. 
+# The results from this cor.mat will guide the subsequent models.
+```
+
+
+```{r}
+# EDA: Correlation Analysis of Numerical Variables vs Class
+# We want to see which variables are the most correlated with class, perhaps we should include these variables in the subseqent models. 
+
+
+set.seed(231)
+subset_census<- census_train
+
+subset_census$class <- factor(subset_census$class)
+subset_census$class_num <- as.numeric(subset_census$class)
+
+subset_census_clean <- na.omit(subset_census)
+numeric_data <- subset_census_clean[sapply(subset_census_clean, is.numeric)]
+numeric_data <- numeric_data[, sapply(numeric_data, function(x) length(unique(x)) > 1) | names(numeric_data) == "class_num"]
+
+cor_matrix <- cor(numeric_data, use = "pairwise.complete.obs")
+cor_with_class <- cor_matrix["class_num", ]
+cor_with_class_sorted <- sort(abs(cor_with_class), decreasing = TRUE)
+print(cor_with_class_sorted)
+
+# Education_num and age are the highest correlated numeric varbles with class. 
+# Lets do the categorical variables now. 
+```
+
+```{r}
+# EDA: Chi Square Test of Categorical Varaibles against Class
+
+# Since we can't do a correlation matrix with categorical variables, I have chosen to examine the results of multiple chi-square analyses of the categorical variables against class. 
+
+# occupation
+table(census_train$occupation, census_train$class)
+chisq.test(table(census_train$occupation, census_train$class))
+
+# marital status
+table(census_train$marital_status, census_train$class)
+chisq.test(table(census_train$marital_status, census_train$class))
+
+# education
+table(census_train$education, census_train$class)
+chisq.test(table(census_train$education, census_train$class))
+
+# Relationship
+table(census_train$relationship, census_train$class)
+chisq.test(table(census_train$relationship, census_train$class))
+
+# race
+table(census_train$race, census_train$class)
+chisq.test(table(census_train$race, census_train$class))
+
+# workclass
+table(census_train$workclass, census_train$class)
+chisq.test(table(census_train$workclass, census_train$class))
+
+# sex
+table(census_train$sex, census_train$class)
+chisq.test(table(census_train$sex, census_train$class))
+
+
+# Relationship X-squared = 6699.1
+# Marital Status X-squared = 6517.7
+# Education X-squared = 4429.7
+# Sex; X-squared = 1517.8
+# Workclass X-squared = 1045.7
+# Race X-squared = 330.92
+
+# It looks like relationship, hours per week, education_num, marital status, and sex are the highest correlating features with class. 
+
+# We should use these to insert as our second model. 
+
+# For Model #3, we could use the lowest correlating features, to compare differences! These are race, fnlwgt, occupation, and capital_loss. 
+```
+
+
+```{r KMEANS 2}
+# KMEANS MODEL 2: Most Correlated Features (Scaled), k = 2
+# Subsetting data to be faster
+set.seed(123)
+subset_index <- createDataPartition(census_train$class, p = 0.005, list = FALSE)
+subset_census <- census_train[subset_index, ]
+
+# Columns of interest
+selected_cols <- c("relationship", "hours_per_week", "education_num", "marital_status", "sex", "age")
+selected_data <- subset_census[, selected_cols]
+
+# Convert to numeric
+selected_data <- as.data.frame(lapply(selected_data, function(x) {
+  if (!is.numeric(x)) as.numeric(factor(x)) else x
+}))
+
+# Normalizing the data
+scaled_data <- scale(selected_data)
+
+# Elbow plot 2
+fviz_nbclust(scaled_data, kmeans, method = "wss", k.max = 10) +
+  ggtitle("Elbow Plot - KMEANS Model 2 (High Corr, Scaled, Sampled)") +
+  theme_minimal()
+
+# We should use k = 2.
+
+```
+
+```{r}
+# Training M2
+KmeanCensus2 <- kmeans(scaled_data, centers = 2)
+table(class = subset_census$class, Cluster = KmeanCensus2$cluster)
+```
+
+```{r KMEANS 3}
+# KMEANS MODEL 3: Most Correlated Features (Unscaled)
+## Elbow Plot 3
+fviz_nbclust(Census_noclass[, selected_cols], kmeans, method = "wss", k.max = 10) +
+  ggtitle("Elbow Plot - KMEANS Model 3 (High Corr, Unscaled)") +
+  theme_minimal()
+# We should use k = 2.
+```
+
+```{r}
+# Training M3
+KmeanCensus3 <- kmeans(Census_noclass[, selected_cols], centers = 2)
+table(class = subset_census$class, Cluster = KmeanCensus3$cluster)
+```
+
+```{r KMEANS 4}
+# KMEANS MODEL 4: Least Correlated Features (Unscaled), k = 3
+
+low_corr_cols <- c("race", "fnlwgt", "occupation", "capital_loss")
+unscaled_low_corr <- Census_noclass[, low_corr_cols]
+
+## Elbow Plot 4
+fviz_nbclust(unscaled_low_corr, kmeans, method = "wss", k.max = 10) +
+  ggtitle("Elbow Plot - KMEANS Model 4 (Low Corr, Unscaled)") +
+  theme_minimal()
+# We should use k = 3, as that is the elbow of the plot. 
+```
+
+
+```{r}
+# Training M4 (k = 3)
+low_corr_cols <- c("race", "fnlwgt", "occupation", "capital_loss")
+unscaled_low_corr <- Census_noclass[, low_corr_cols]
+KmeanCensus4 <- kmeans(unscaled_low_corr, centers = 3)
+table(class = subset_census$class, Cluster = KmeanCensus4$cluster)
+```
+ 
+
+```{r}
+# KMEANS MODEL 5: All Features (scaled, k = 2)
+# Scale the predictors
+scaled_all <- scale(Census_noclass)
+
+# Elbow Plot 5
+fviz_nbclust(scaled_all, kmeans, method = "wss", k.max = 10) +
+  ggtitle("Elbow Plot - Model 5") +
+  theme_minimal()
+
+# It looks like K = 2 or 3 would be best. Lets try both and see which has the higher silhouette score! 
+```
+
+```{r}
+# Training M5 (k = 2)
+KmeanCensus5 <- kmeans(scaled_all, centers = 2)
+table(class = subset_census$class, Cluster = KmeanCensus5$cluster)
+```
+
+```{r}
+# Elbow Plot 5
+fviz_nbclust(scaled_all, kmeans, method = "silhouette", k=2) +
+  ggtitle("Silhouette 5a") +
+  theme_minimal()
+
+# Note: Models 4 and 5 were included as an exploratory analysis of the effect of scaled vs unscaled values on the clustering splits. I wanted to see if the splits were cleaner with scaled features vs unscaled features.
+
+# To evaluate all the K-Means models, I will compare the silhouette scores of all five models. 
+
+# The higher the silhouette score, the more compact the clusters are, with points close to the cluster center and more well seperated from other clusters. 
+
+# If two models have high silhouette scores, I will keep the model with the lowest amount of clusters, to keep the representation of the data as simple as possible, and thus easier to interpret. 
+```
+
+
+```{r}
+library(cluster)
+# Preparing the data for visualization
+models <- list(KmeanCensus1, KmeanCensus2, KmeanCensus3, KmeanCensus4, KmeanCensus5)
+datasets <- list(Census_noclass, scaled_data, Census_noclass[, selected_cols], unscaled_low_corr, scaled_all)
+silhouette_scores <- sapply(seq_along(models), function(i) {
+  mean(silhouette(models[[i]]$cluster, dist(datasets[[i]]))[, "sil_width"])
+})
+```
+
+
+
+```{r kmeans-visual, echo=FALSE, include=TRUE, fig.show='asis', fig.width=5, fig.height=3}
+# Visualization of K-Means Sihouette Scores 
+# Create the barplot
+bar_positions <- barplot(silhouette_scores,
+                         names.arg = paste0("KM ", 1:5),
+                         col = "skyblue", ylim = c(0, 0.6),
+                         main = "Silhouette Scores of K-Means Models",
+                         ylab = "Average Silhouette Score",
+                         xlab = "Model")
+
+abline(h = seq(0, 0.6, 0.1), col = "gray90", lty = "dotted")
+text(x = bar_positions,
+     y = silhouette_scores + 0.02,
+     labels = round(silhouette_scores, 3),
+     cex = 0.9)
+```
+
+
+
+
+```{r, results='asis'}
+# KMEANS RESULTS TABLE
+library(kableExtra)
+# Create a table for k-means model summary
+kmeans_results <- data.frame(
+  Model = c("1", "2", "3", "4", "5"),
+  Features = c(
+    "All features       ",
+    "Highest cor        ",
+    "Highest cor        ",
+    "Lowest cor         ",
+    "All features       "
+  ),
+  Scaled = c("No", "Yes", "No", "No", "Yes"),
+  K = c(2, 2, 2, 3, 2),
+  Silhouette_Score = c(0.3366, 0.2924, 0.5271, 0.52, 0.1496)
+)
+
+# Print with padding between columns
+kmeans_results %>%
+  kable(caption = "K-Means Model Setup and Silhouette Scores", align = "c") %>%
+  kable_styling(full_width = FALSE, position = "center", font_size = 12)
+
+# K-Means Summary 
+
+# The scaled models (2 and 5) provide similar splits (even though model 2 includes additional features) because it is trained on the subset of data (n = 164) and share dominant features.This is also the case for the unscaled models (1, 3, and 4). 
+
+# K-Means Model 3 and Model 4 (both unscaled/raw models) also provide similar silhouette scores, and are also the highest silhouette scores out of all 5 models. 
+
+# I noticed that scaling the features makes a huge difference when evaluating the silhouette scores of the models. 
+# Specifically, in this task, I get better clustering models with UNSCALED DATA when compared to scaled data. 
+# The reason for this is that favoring some features may improve clustering, as it forces samples to different sides of the feature space. 
+# So therefore, my results make sense. 
+
+# As Models 3 and 4 have the same Silhouette score, I have chosen Model 3 as the best K-Means model, due to having a smaller amount of clusters (k = 3) than Model 4
+
+# However, it is important to not that despite the high silhouette score of models 3 and 4, the model is still not ideal. 
+
+# Supervised learning methods such as regression and classification methods are preferred over unsupervised clustering algorithms if we are trying to predict class. 
+
+# For four of the five models tested, both elbow and silhouette plots indicated that K = 2 was optimal. 
+# Model 1 included all 14 features. Post-hoc analysis identified key features most associated with income, which were used to train Models 2 (scaled) and 3 (unscaled). 
+# Model 4 explored the effect of less relevant features on clustering, while Model 5 used all features but with scaling applied. 
+# I selected the model with the highest silhouette score as the best overall, as this suggests well-separated clusters and stronger group structure in the data.
+```
+
+Summary: Models 3 and 4 (unscaled/raw data) achieved the best silhouette scores out of all 5 models. They provided nearly the same scores, despite including different features in the models. Models 3 and 4 performed better than Models 2 and 5, which used scaled data. Therefore, t is important to note that unscaled data produced better clustering than scaled data. Although models 3 and 4 performed equally well, I have chosen Model 3 (k = 2) as the ideal K-Means model due to it using less k clusters than Model 4 (k = 3). This keeps the results simpler and easier to interpret. It is important to note that K-Means is unsupervised, and since our goal is to predict class, supervised algorithms are preferred, making classification and regression algorithms more appropriate for this task. 
+```{r}
+dir.create("figures")
+png("figures/knn_metrics.png", width = 900, height = 600)
+barplot(metrics,
+        beside = TRUE,
+        col = c("steelblue", "darkorange", "seagreen", "orchid"),
+        ylim = c(0, 1),
+        main = "KNN Model Performance Metrics",
+        ylab = "Metric Value",
+        xlab = "Model")
+legend("topright",
+       legend = rownames(metrics),
+       fill = c("steelblue", "darkorange", "seagreen", "orchid"),
+       bty = "n")
+dev.off()
+```
+
+```{r}
+png("figures/kmeans_silhouette.png", width = 900, height = 600)
+barplot(silhouette_scores,
+        names.arg = paste0("KM ", 1:5),
+        col = "skyblue",
+        ylim = c(0, 0.6),
+        main = "Silhouette Scores of K-Means Models",
+        ylab = "Average Silhouette Score",
+        xlab = "Model")
+dev.off()
+```
+
+
+
